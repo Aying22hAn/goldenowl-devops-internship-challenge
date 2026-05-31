@@ -1,0 +1,52 @@
+name: CD Pipeline
+
+# Luồng CD chỉ chạy khi code được gộp vào master
+on:
+  push:
+    branches:
+      - master
+
+# BẮT BUỘC để GHA có thể xin token từ AWS qua OIDC
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Amazon ECS
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./src
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      # 1. Xác thực OIDC
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::474668405807:role/OIDCGithub
+          aws-region: ap-southeast-1
+
+      # 2. Đăng nhập vào Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 3. Build, Tag và Push Image mới
+      - name: Build and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: golden-owl-app
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # 4. Kích hoạt Rolling Update trên ECS (Không gây gián đoạn dịch vụ)
+      - name: Force ECS to deploy new image
+        run: |
+          aws ecs update-service --cluster GoldenOwl-ECS-Cluster --service golden-owl-service --force-new-deployment
